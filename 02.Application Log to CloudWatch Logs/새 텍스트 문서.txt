@@ -1,0 +1,36 @@
+배포에 사용되는 init.sh 와 appDeploy.py 를 사용한 것으로
+
+적용하는 방법은 다음과 같음
+
+
+0. appDeploy.py 에 있는 IAM Policy 로 IAM Role 생성 후 인스턴스에 연결
+
+1. 저장해야 할 Application Log File 의 Full Path "logPath.txt" 참조하여 작성
+
+2. 작성한 File 을 S3 에 저장
+
+3. Instance Tag
+[Key]			[Value]
+bucket			단계 2 의 S3 Bucket 명
+logfiles3key	저장된 logPath File S3 Key
+osappuser		Application 실행하는 user
+osappgroup		Application 실행하는 user의 Group
+
+4. CloudWatch Log Group 생성
+
+5. /root 아래에 각각 init.sh appDeploy.py 저장
+
+6. chmod +x init.sh
+
+7. 
+cd /root
+./init.sh {CloudWatch Log Group}
+으로 설치
+
+7-1.
+AutoScalingGroup 인 경우
+LaunchConfiguration UserData
+
+#!/bin/bash
+cd ~
+./init.sh {CloudWatch Log Group}

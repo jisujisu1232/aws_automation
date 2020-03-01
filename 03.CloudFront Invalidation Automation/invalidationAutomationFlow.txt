@@ -1,0 +1,97 @@
+﻿[CloudFront Invalidation 자동화]
+
+1. exceptionPaths
+	Object 삭제 될 때에만 무효화에 추가
+2. triggered objects
+	Object 등록/삭제 모두 무효화에 추가
+
+[s3 Object create or delete action 발생시 Flow]
+      1. lambda 호출
+      2. key 가 {#1}exceptionPaths 에 포함되지 않거나 ObjectRemoved:Delete일 때 sqs 에 호출된 이벤트 저장(buckey, key ,eventName)
+      3. 4단계 직전 호출 시간에서 10초 이상 경과 하지 않았다면 종료
+      4. sqs에 쌓인 내용을 모두 가져와 해당 s3 bucket 를 origin으로 사용하는 CloudFront 중
+          behavior 의 origin 이 해당 s3 bucket일 때
+            key(ex>resources/1.jpg) 가 behavior pathPattern(ex>/resources/*) 에 포함하고
+              behavior 의 TTL 이 0보다 크거나 {#2}Object 삭제 액션일 때
+                  CF 별 invalidation 묶음에 추가
+      5. 각 cf 별로 Create invalidation 묶음 처리
+
+    #1
+      web 사용자와 연계되는 업로드 업무에 사용되는 경로 난수화 혹은 겹치지 않는 key(존재하는 key 와 같은 이름으로 생성되지 않음)을 저장하는 업무에 제한함.
+      따로 빼는 이유 - cf invalidation 을 생성하기 cf api를 사용하는데 계정별로 api 에 대한 동시 제한치가 있어 너무 많은 변동이 있는 경로는 자동화에 제한됨.
+      따라서 object 삭제 시에만 invalidation 에 포함 됨.
+      ex>
+        resources/upload/ 를 exceptionPath 로 사용할 때
+        {url attach to cf}/resources/upload/123123123.jpg 를 업로드 한다면
+        - cf 에 캐싱되지 않았을 때
+            cf를 통한 최초 접근이기 때문에 s3 origin 에서 가져와 캐싱.
+        - cf 에 Deny page 가 캐싱 됐을 때
+          누군가 123123123.jpg 파일이 없을 때 url을 통해 임의 접근해서 발생하는 현상으로
+          해당 현상 발생 시 s3에서 해당 파일을 pc에 저장하고 삭제 후 즉시 같은 이름으로 재 업로드 하면 해결 됨.(Invalidation 직후 누군가 접근하지 않는 다면)
+          (exceptionPath 이더라도 Object 삭제 일 때는 무조건 invalidation 에 포함)
+    #2
+      TTL 이 0 일 때 Invalidation 을 하지 않는 것을 기본으로 하는데
+      오브젝트가 삭제됐거나 없을 때 TTL 이 0 이더라도 어느 사용자가 CF 를 통해 해당 key 에 접근하면 AWS 정책에 의해 CF 에 AccessDenied 페이지가 일정시간 자동 캐싱된다.
+      이런 경우 삭제 후 즉시 재 등록하여 해당 키를 살리는 시나리오를 위한 조건
+
+
+[사전 조건(구축)]
+  sns
+    topic has admin's email for send error
+
+  sqs
+    Default Visibility Timeout  5min
+    Message Retention Period    1min
+    Maximum Message Size        256kb
+    Delivery Delay              0
+
+  Lambda
+    -Automation of CloudFront invalidation Lambda 작성
+    -Lambda Tags
+      [Key]           [Value]
+      topicArn        {snsTopicArn in admin's email}
+      errorBucket     {save err paths}
+      qUrl            sqs url for send and receive
+
+  s3 buckets
+    1.CF 와 연결된 Bucket
+      -Properties->Events-> ObjectCreate(All) and ObjectDelete(All) to {CloudFront Automation of invalidation Lambda}
+      -s3 tag
+        Key             Value
+        exceptionPaths  {invalidation 예외 할 경로(Delete 될 때만 동작)} path1,path2 의 형태로 , 를 구분자로 여러 경로 넣을 수 있음
+
+    2.invalidation 처리를 하는 Lambda 에서 실패된 경로들을 저장할 bucket
+
+
+[존재하는 key 이지만 Access Denied 페이지가 뜰 때.]
+  web 사용자가 동적으로 file upload 하는 경로에서만 발생함.
+
+  해당 Bucket Key 로 이동 후 다운로드
+  -> 해당 Key 삭제
+  -> 다시 업로드 하여 Access Denied 캐싱을 삭제할 수 있음.
+
+[Invalidation 중에 Error 발생했을 때.]
+  AWS 의 모든 서비스들의 API는 Case로 증가시킬 수 없는 LIMIT을 가지고 있음.
+  때문에 SQS 를 사용해 묶을 처리로 이를 방지하고 있지만 사용법에 따라 에러가 발생할 수 있음.
+
+  Create Invalidation 이 실패 했을 때 관리자에게 메일이 감.
+  ex>
+    subject:
+      [Error] CloudFront Invalidation
+    content:
+      bucket : error-bucket
+
+      invalidation_error/201809030429388315187glzee2k6l_E29EXP7S5VQKAW.txt
+      invalidation_error/201809030429388315187glzee2k6l_E3EP3CZZS8DQD9.txt
+
+  -> error-bucket 으로 이동 후 아래 키들을 다운로드
+  -> 메모장을 제외한 text editor 로 오픈시
+      CloudFront Id [{CF Id}]
+      (Set {n} Start)
+      path_1
+      ...
+      path_m
+      (Set {n} End)
+
+      Set 이 나누어지는 이유 : invalidation 에 입력 제한(3000개)이 있음.
+  -> Console에서 해당 CF 로 이동 -> Invalidations 탭으로 이동 -> Create Invalidation 클릭 -> Set 별로 입력 후 실행.

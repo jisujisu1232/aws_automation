@@ -1,0 +1,46 @@
+최초 생성 시 type 을 제외한 모든 값을 동일하게 생성
+          Min/Max/Desired
+Active    최초 1/1/1 권장
+StandBy   0/0/0
+
+Name 을 제외하고 모두 소문자 아닐 시 동작 안될 수 있음.
+
+tag Name              Tag New Instances
+Name                  yes
+taskfordeploy         yes
+type                  no
+prevtype              no
+repetitions           no
+admintopicarn         yes
+bucket                yes
+logfiles3key          yes
+osappgroup            yes
+osappuser             yes
+apppath{1-9}          yes
+apps3Key{1-9}         yes
+s3versionidapp{1-9}   yes
+
+Name                  ASG소유 인스턴스에 붙는 Name
+taskfordeploy         업무 구분(여러 업무가 있을 때 구분하기 위한 구분자)
+type                  Active 운영/StandBy 대기
+prevtype              배포 Start Lambda 호출 당시 type(Lambda안에서 생성됨 사용자가 입력할 필요 없음)
+repetitions           배포 Step 당 최대 반복 회수(1회 당 약 4분 / 3이면 12분 / [3-9] / 없으면 Default 2)
+admintopicarn         배포 관련 sns 수신 받을 Admin sns topic arn(Instance 안에서 배포 오류 날 때)
+bucket                s3 bucket name(application war 와 logfiles 가 저장된 Bucket Versioning 필수)
+logfiles3key          log file들의 경로를 가지고 있는 txt file
+osappgroup            log file이 없을 시 생성시키는 log file의 소유 linux user group
+osappuser             log file이 없을 시 생성시키는 log file의 소유 linux user
+apppath{1-9}          war 가 배포될 인스턴스 안의 경로(절대 경로)
+apps3Key{1-9}         war s3 key
+s3versionidapp{1-9}   s3 object version id
+
+(
+  하나의 세트
+  apppath{1-9}
+  apps3Key{1-9}
+  s3versionidapp{1-9}
+  ex//
+  apppath1          /apps/tomcat/webapps/ROOT.war
+  apps3Key1         ROOT.war
+  s3versionidapp1   {s3 bucket 에서 확인해서 넣음}
+)

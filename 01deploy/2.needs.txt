@@ -1,0 +1,25 @@
+﻿1.기준 인스턴스 생성
+init.sh 와 appDeploy.py 를 root 디렉토리에 추가
+WAS 등 서비스에 필요한 것들 설치 (WAS, java 등) 후 AMI 생성
+
+
+
+2.AMI 뜬 후 작업
+
+-LaunchConfiguration 생성 시 UserData
+
+#!/bin/bash
+cd ~
+./init.sh {CloudWatch 로그 그룹명}
+{was 실행}
+
+rc.local 의 내용보다 UserData 의 내용이 뒤에 실행됨.
+
+예시//
+#!/bin/bash
+cd ~
+./init.sh JISU-WAS
+su - jboss -c "/appPath/start.sh"
+
+
+3.ASG Tag 정의.txt 참조하여 ASG Set 생성

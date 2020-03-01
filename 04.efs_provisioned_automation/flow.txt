@@ -1,0 +1,56 @@
+[Precondition]
+
+	1. EFS Automation Admin SNS 생성
+		관련 메일(성공 여부 및 Error) 받을 관리자 e-mail 추가
+
+	2. Lambda 생성
+		efs_provisioned_automation.py 참조
+
+	3. Alarm Trigger 용 SNS 생성
+		1 의 Lambda 연결
+
+	4. CloudWatch Metric Alarm 생성
+		EFS BurstCreditBalance (<=0)
+		3 의 SNS 연결
+
+	5. Lambda Log Expire 설정
+
+[Flow]
+
+	CloudWatch EFS BurstCreditBalance Metric Alarm (<=0?)
+		Call SNS - Lambda
+			EFS to provisioned
+			Make CloudWatch Event Rule
+				with cron Excution datetime + 1Day + 10 min
+					ex>
+						Excution datetime
+							2018/07/30 19:23:22
+						Event Rule cron
+							cron(33 19 31 * ? *)
+				with Json {"efsId":"{efsId}","ruleName":"{created ruleName}"}
+
+
+
+
+	after 1Day 10min
+		Lambda called by CloudWatch Event Rule
+			EFS to bursting
+			Delete CloudWatch Event Rule
+
+		End
+
+
+
+
+[Error Code]
+
+E000	Lambda {Lambda function_name}'s tag mibps is not a number.
+			Lambda 의 mibps 에 숫자가 아닌 값
+E001	Failed to update {efsName}({efsId})'s throughput mode to provisioned
+			최초 알람에 의해 호출된 Lambda에서 EFS provisioned 로 변경 실패
+E002	Failed to update {efsName}({efsId})'s throughput mode to bursting
+			CloudWatch rule 에 의해 호출된 Lambda에서 EFS bursting 로 변경 실패
+E003	Failed to set CloudWatch rule({ruleName}).
+			최초 알람에 의해 호출된 Lambda에서 CloudWatch rule 생성 실패
+E004	Failed to delete CloudWatch rule({ruleName}).
+			CloudWatch rule 에 의해 호출된 Lambda에서 CloudWatch rule 삭제 실패

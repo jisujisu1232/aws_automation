@@ -1,0 +1,172 @@
+[개요]
+같은 AMI를 바라보는 AutoScalingGroup 2개를 Active/StandBy 로 유지하고(ASG 자체에는 비용이 없음)
+Lambda 및 LaunchConfiguration 에 설정된 UserData 를 통한 Blue/Green 배포
+
+[사전 준비(구축)]
+(Lambda)
+1. Start/Trigger/errorHandling Lambda 3개를 py 파일 별 주석을 참조하여 작성.
+2. 배포 Trigger Lambda를 담을 SNS Topic 생성 후 Trigger Lambda 등록
+3. 관리자 Email 을 담을 SNS Topic 생성.
+4-1.  2의 topicArn 을 세 람다 Env key triggerTopicArn 에 저장
+4-2.  3의 topicArn 을 세 람다 Env key topicArn 에 저장
+4-3.  1의 errorHandling Lambda명을 Start/Trigger 람다 Env key errorLambdaName 에 저장
+
+[배포 시나리오]
+
+0. Simple Notification Service -> Topics -> ADMIN-TOPIC 에 모든 관리자가 포함됐음을 가정 함.
+    관리자 email 추가 방법
+      Create subscription 클릭
+      -> Protocol Email 선택
+      -> Endpoint 에 Email 입력 후 Create subscription 클릭
+      -> 해당 Email 로
+          Subject:
+            AWS Notification - Subscription Confirmation
+          Content:
+            You have chosen to subscribe to the topic:
+            arn:aws:sns:ap-northeast-2:123456789012:ADMIN-TOPIC
+
+            To confirm this subscription, click or visit the link below (If this was in error no action is necessary):
+            Confirm subscription
+
+            Please do not reply directly to this email. If you wish to remove yourself from receiving all future SNS subscription confirmation requests please send an email to sns-opt-out
+
+        와 같이 오는데 Confirm subscription 클릭 후 링크되는 화면의 링크들은 누르지 말고 닫으면 구독 완료.(클릭 시 구독이 취소될 수 있음.)
+
+1. version up 된 war 를 s3 bucket 에 저장
+2. Deploy-Start Lambda 로 이동
+3. 테스트 왼쪽의 드랍박스 클릭
+    [일반 배포]
+      - 기존에 저장한 test event 가 없을 때
+          Create new test event 클 후 Event name 입력
+          내용에 아래 텍스트 추가 후 저장
+          {
+            "task": "{task}"
+          }
+      - 기존에 저장한 test event 가 있을 때
+          기존에 저장한 Event name 을 선택
+    [war Rollback]
+        {
+          "task":"{task}",
+          "versions":"{war s3 versionId(구분자 ,)}"
+        }
+        ex>
+        {
+          "task":"WAS",
+          "versions":"{war1 versionId},{war{n} versionId}"
+        }
+        #주의사항
+          긴급 배포로 배포 한 후 일반 배포를 하게되면 가장 최근 war 로 엎어지기 때문에
+          긴급 배포 후 새 war를 업로드 하지 않았다면 긴급 배포 한 version war 를 다운 받은 후 재 업로드 해야 함.
+
+4. Test 클릭(test event 내용을 payload 로 람다를 실행 함)
+    Start Lambda 는 Reserve concurrency 값이 1로 동시 1개의 프로세스만 존재할 수 있으며
+    프로세스가 종료되지 않으면 Lambda 호출 자체가 실패된다.
+
+5. 관리자에게 전달되는 메일을 통해 현재 상태 체크.
+  - 정상 Flow
+      [Deploy] Start(Task : {task})                       -> 배포 시작
+      [Deploy] Call Step 1-{n}(Task : {task})             -> 실제 LB 와 TG 를 복제한 Dummy 를 통해 연결되는지 확인
+      [Deploy] Call Step 2-{n}(Task : {task})             -> 실제 LB 에 붙여 정상 연결 되는지 확인
+      [Success] Non-disruptive deployment(Task : {task})  -> 배포 완료
+  - Error 발생
+      #각 ErrCode 의 정의는 에러 정의 참조.
+
+      @배포 시작 시 에러 패턴
+        [Failed] Deploy Start Failed(Task : {task}, errCode : {errCode}) 일 때
+          선행 배포가 진행중이 아니라면 Start Lambda Error Definition을 참조
+      @배포 시작 후 에러 패턴
+        [Failed] Non-disruptive deployment(errCode : {errCode}, Task : {task})
+          Trigger Lambda Error Definition 을 참조
+  #1
+    배포 Clean 작업
+    Deploy-ErrorHandler Lambda 로 이동
+      test event 내용에 아래 내용 추가 후 실행(test 클릭)
+      {
+        "task": "WAS"
+      }
+      [Success] Deploy Clean(Task : WAS)
+
+[긴급 배포]
+긴급 상황으로 Active ASG 의 min/desire 를 0 으로 내렸을 때.
+  - max 값은 변경하지 말아야 함.
+  - 다시 배포 진행할 때 flow
+      1. Active ASG 의 min/desire 를 올린다.
+      2. 배포 Start Lambda 실행
+      3. 에러 발생 시 즉시 Active ASG 의 min/desire 를 0 으로 수정 및 원인 파악 후 과정 1부터 다시 진행한다.
+      4. [Deploy] Call Step 1-1(Task : {task}) 메일이 오면 즉시 Active ASG 의 min/desire 를 0 으로 수정한다.
+          - 에러 발생시 과정 3 참조.
+      5. 배포 과정 진행.
+
+[Start Lambda Error Definition]
+
+400   Has no Active {and/or} StandBy ASG
+			 사전 준비가 제대로 안 됐을 때
+       누군가 ASG를 임의로 삭제 및 TAG 수정 했을 때 발생
+401   StandBy ASG Instances is not Zero or not equal to DesiredCapacity
+			 이미 배포가 진행 중 일 때
+       직전 배포 Clean 처리가 안 됐을 때
+       StandBy ASG 누군가가 임의 수정 했을 때 발생
+402   일반 배포
+        Error: Has no App key or Version Update Failed
+          war s3 key 가 없을 때
+          ASG의 versionId tag 업데이트 실패 했을 때 발생
+      긴급배포
+        {bucket} key({s3 key}) has no versionId({versionId})
+          war s3 key 가 없을 때
+          VersionId를 잘못 입력 했을 때
+          ASG의 versionId tag 업데이트 실패 했을 때 발생
+403   {ActiveAsgName}(Active) is not attach to ELB and TargetGroup
+        Active ASG 에 연결된 LB 가 아무 것도 없을 때 발생
+404   Attached resource name startswith {tempPrefix} Check your previous deployment.
+        연결된 LB 가 테스트에 사용되는 LB 일 때 발생
+405   Attached resource name startswith {tempPrefix} Check your previous deployment.
+        연결된 TG 가 테스트에 사용되는 TG 일 때 발생
+406   {ActiveAsgName}(Active) is not attach to ELB
+        배포 도중 누군가 Active ASG의 CLB 를 detach 했을 때 발생
+407   Failed in make tempId. Please rerun
+        testLB 명을 생성 실패했을 때 발생
+408   {ActiveAsgName}(Active) is not attach to Target Group
+        배포 도중 누군가 Active ASG의 TG 을 detach 시킴
+409   Failed in make tempId. Please rerun
+        test TG 명 생성 실패했을 때 발생
+410   Failed in make tempId. Please rerun
+        test ALB/NLB 명 생성 실패했을 때 발생
+411   Please Check {triggerTopicArn} is correct.
+        Start Lambda 의 triggerTopicArn tag 가 잘못 입력되었을 때
+        Trigger SNS Topic 이 삭제 됐을 때 발생
+412   Error: update auto scaling group is Failed
+        StandBy ASG를 1/1/max(desire/min/max) 로 업데이트 실패했을 때 발생
+500   Error: please check CloudWatch Logs for lambda({context.function_name})
+        정의되지 않은 에러가 났을 때
+
+[Trigger Lambda Error Definition]
+
+T000		{ActiveAsgName}(Active) is not attach to ELB and Target Group
+        Someone deleted dummy CLB or Target Group
+        Active ASG 에 붙어있는 LB 나 TG 가 없거나 붙어있던 LB 나 TG 가 존재 하지 않을 때 와 같이 누군가 임의삭제 하여 발생하는 에러
+T001		[Failed] error in Application
+        Step 1 검사를 통과하지 못 함
+T002		An error occurred when detaching testCLB from {StandByAsgName}(StandBy).
+        testCLB 를 detach 할 때 에러 발생
+T003		An error occurred when deleting testCLBs({testELBNames}).
+        testCLB 를 삭제 할 때 에러 발생
+T004		An error occurred when attaching activeCLBs from {StandByAsgName}(StandBy).
+        StandBy ASG 에 Active LB 를 연결 할 때 에러 발생
+T005		An error occurred when deleting test ALBs or NLBs.
+        ALB/NLB 삭제 할 때 에러 발생
+T006		An error occurred when deleting test Target Groups.
+        Target Group 삭제 할 때 에러 발생
+T007		An error occurred when Check with real LB or TG from {StandByAsgName}(StandBy) .
+        Step 2 Active LB 에서 StandBy ASG 의 Instance 가 InService인지 체크 하는 도중 에러 발생
+T008		An error occurred when detaching real CLBs and Target Groups from {ActiveAsgName}(Active) .
+        Active ASG 에 붙은 CLB 와 TG 를 detach 하는 도중 에러 발생
+T009		{ActiveAsgName}[Min, Max ,Desire] to 000 failed. you need to change Active ASG[Min, Max ,Desire] to 0 And swap Tag Type Active/StandBy
+        Active ASG 를 000으로 Update 하는 도중 실패 함.
+T010		Active/StandBy swap Failed. Please change tag(Type) {ActiveAsgName} to StandBy and {StandByAsgName} to Active
+        type 태그를 swap 하는데 실패 함
+T011		Test Failed on dummy CLB({errorCLBs}) and Target Group({errorTGs})
+        Step 2 검사를 통과하지 못 함
+T012		Test Failed on dummy CLB({errorCLBs}) and Target Group({errorTGs}) and Failed update {StandByAsgName}(StandBy) DesiredCapacity/Min/Max to 0/0/0
+        T011 에서 StandBy to 000 Failed
+T013		Has no Active/StandBy Autoscaling Group
+        호출된 task 를 가지는 ASG 중에 Active 와 StandBy 가 없을 때 발생.
